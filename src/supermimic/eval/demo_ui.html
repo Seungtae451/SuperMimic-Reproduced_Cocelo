@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V10 · SuperMimic demo</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #17191d; background: #f8f8fa; overflow: hidden; }
+    .viewport { position: fixed; inset: 0; overflow: hidden; }
+    /* Viser owns the live 3-D scene. Its engineer panel is outside this crop. */
+    .viewport iframe { position: absolute; top: 0; left: -350px; width: calc(100% + 700px); height: 100%; border: 0; }
+    .shade { position: fixed; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(248,248,250,.5), transparent 19%, transparent 82%, rgba(248,248,250,.28)); }
+    .head { position: fixed; top: 20px; left: 24px; right: 24px; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; }
+    .head > * { pointer-events: auto; }
+    h1 { margin: 0 0 9px; font-size: 16px; letter-spacing: -.035em; font-weight: 650; }
+    .display { display: flex; width: fit-content; align-items: center; gap: 2px; padding: 4px; border: 1px solid #e6e7eb; border-radius: 22px; background: rgba(245,245,247,.87); box-shadow: 0 3px 16px #1015220b; }
+    .chip { display: inline-flex; align-items: center; gap: 5px; border: 0; border-radius: 18px; padding: 6px 10px; background: transparent; color: #555a61; font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+    .chip.active { background: white; color: #191b1f; box-shadow: 0 1px 5px #1118271c; }
+    .chip.static { cursor: default; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #bbc0c5; border: 2px solid #bbc0c5; }
+    .chip.active .dot { background: #555b62; border-color: #555b62; }
+    .step-count { margin: 9px 10px; color: #81858b; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
+    .legend { display: flex; align-items: center; gap: 12px; margin: 9px 10px 0; color: #555a61; font-size: 11px; }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .legend i { width: 9px; height: 9px; border-radius: 50%; border: 1px solid #a6abb2; background: #f8f9fb; }
+    .legend .reference i { border-color: #de3b86; background: #f07aa9; }
+    .legend .reference.off { opacity: .35; }
+    .back { text-decoration: none; color: #24272b; background: #ffffffde; border: 1px solid #eceef0; border-radius: 22px; padding: 10px 17px; font-size: 12px; box-shadow: 0 5px 22px #00000012; }
+    .dock { position: fixed; bottom: 25px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 0; width: min(975px, calc(100% - 30px)); min-height: 54px; padding: 5px 9px; background: rgba(255,255,255,.93); border: 1px solid #e5e6e9; border-radius: 31px; box-shadow: 0 15px 30px #20242d18, 0 2px 6px #20242d0b; backdrop-filter: blur(18px); z-index: 5; }
+    .icon-btn { width: 44px; height: 40px; flex: none; border: 0; border-radius: 22px; background: transparent; color: #15171a; font-size: 22px; cursor: pointer; }
+    .icon-btn:hover, .motion-trigger:hover { background: #f1f2f4; }
+    .divider { width: 1px; height: 23px; background: #d9dbdf; flex: none; margin: 0 11px; }
+    .policy-label, .slider-label { font-size: 12px; white-space: nowrap; }
+    .toggle { width: 40px; height: 23px; flex: none; margin: 0 15px 0 8px; border: 0; border-radius: 16px; background: #cbd0d5; padding: 3px; cursor: pointer; }
+    .toggle::before { content: ""; display: block; width: 17px; height: 17px; border-radius: 50%; background: white; box-shadow: 0 1px 4px #0003; transition: transform .16s; }
+    .toggle.on { background: #17191c; }
+    .toggle.on::before { transform: translateX(17px); }
+    .noise-wrap, .friction-wrap { display: flex; align-items: center; gap: 8px; padding: 0 10px; min-width: 205px; }
+    .number { color: #8d9299; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 34px; }
+    input[type=range] { appearance: none; width: 103px; height: 3px; background: #d2d5da; border-radius: 10px; cursor: pointer; }
+    input[type=range]::-webkit-slider-thumb { appearance: none; width: 19px; height: 19px; border: 1px solid #dce0e4; border-radius: 50%; background: white; box-shadow: 0 1px 5px #0002; }
+    input[type=range]:disabled { cursor: not-allowed; opacity: .55; }
+    .motion-trigger { min-width: 0; flex: 1; height: 40px; border: 0; border-radius: 23px; background: transparent; text-align: left; color: #494d53; font-family: inherit; font-size: 12px; cursor: pointer; padding: 0 14px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .motion-trigger strong { font-weight: 600; color: #23262b; }
+    .menu { position: absolute; right: 0; bottom: 67px; width: min(410px, calc(100vw - 36px)); max-height: min(70vh, 740px); overflow: hidden; display: none; flex-direction: column; background: #fffffff2; border: 1px solid #e5e7eb; border-radius: 19px; box-shadow: 0 15px 50px #171a2730; backdrop-filter: blur(20px); }
+    .menu.open { display: flex; }
+    .menu-header { padding: 16px 16px 10px; font-weight: 650; font-size: 14px; }
+    .filter { width: calc(100% - 28px); margin: 0 14px 10px; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 11px; background: #f7f8fa; font-family: inherit; font-size: 13px; outline: none; }
+    .filter:focus { border-color: #aeb6c0; background: white; }
+    .menu-list { padding: 3px 8px 12px; overflow: auto; }
+    details { border-bottom: 1px solid #f0f1f3; }
+    summary { cursor: pointer; list-style: none; padding: 11px 10px; display: flex; justify-content: space-between; color: #4b5057; font-size: 13px; text-transform: capitalize; }
+    summary::-webkit-details-marker { display: none; }
+    summary .count { color: #a4a8ae; }
+    .item { display: block; width: 100%; border: 0; border-radius: 8px; background: transparent; padding: 9px 12px 9px 22px; color: #33373d; text-align: left; font-family: inherit; font-size: 12px; cursor: pointer; }
+    .item:hover, .item.selected { background: #edf0f3; }
+    .source { display: block; margin-top: 3px; color: #9a9ea5; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .footnote { margin: 8px 14px 14px; color: #999da3; font-size: 10px; }
+    .load-more { margin: 0 14px; padding: 9px; border: 1px solid #e5e7eb; border-radius: 9px; background: #f7f8fa; font-family: inherit; font-size: 12px; cursor: pointer; display: none; }
+    @media(max-width:900px) { .friction-wrap { display: none; } .noise-wrap { min-width: 150px; } .noise-wrap input { width: 55px; } .divider { margin: 0 6px; } }
+    @media(max-width:650px) { .head { top: 13px; left: 13px; right: 13px; } .back { display: none; } .policy-label, .noise-wrap, .friction-wrap { display: none; } .dock { bottom: 12px; } .motion-trigger { padding: 0 8px; } }
+  </style>
+</head>
+<body>
+  <div class="viewport"><iframe title="Live V10 MuJoCo simulation" src="__VISER_URL__" allow="fullscreen"></iframe></div>
+  <div class="shade"></div>
+  <header class="head">
+    <div>
+      <h1>Live V10 simulation</h1>
+      <div class="display">
+        <span class="chip active static"><span class="dot"></span>Policy</span>
+        <button id="goal" class="chip active" title="Show or hide the retargeted reference robot"><span class="dot"></span>Goal</button>
+        <span class="chip active static" title="MuJoCo physics simulation"><span class="dot"></span>MuJoCo</span>
+      </div>
+      <div class="step-count" id="steps">STEP 0 SINCE THE LAST RESET</div>
+      <div class="legend"><span><i></i>Policy robot</span><span class="reference" id="reference-legend"><i></i>Retargeted reference · 42% opacity</span></div>
+    </div>
+    <a class="back" href="https://supermimic.github.io/" target="_blank" rel="noopener noreferrer">‹ SuperMimic</a>
+  </header>
+  <nav class="dock" aria-label="Demo controls">
+    <button class="icon-btn" id="reset" title="Reset (R)" aria-label="Reset">↺</button>
+    <button class="icon-btn" id="play" title="Play or pause (Space)" aria-label="Play">▶</button>
+    <div class="divider"></div>
+    <span class="policy-label">Policy</span><button class="toggle on" id="policy" aria-label="Policy on" aria-pressed="true"></button>
+    <div class="noise-wrap"><span class="slider-label">Action noise</span><span class="number" id="noise-value">0.00</span><input id="noise" type="range" min="0" max="0.3" step="0.01" value="0" aria-label="Action noise"></div>
+    <div class="friction-wrap" title="Fixed to the deterministic evaluation setting (1.0)"><span class="slider-label">Friction</span><span class="number">100%</span><input type="range" value="100" disabled aria-label="Friction fixed at 100%"></div>
+    <div class="divider"></div>
+    <button class="motion-trigger" id="motions" aria-expanded="false">☰&nbsp; <strong>Loading motions…</strong></button>
+    <section class="menu" id="menu" aria-label="Motions">
+      <div class="menu-header">Motions</div>
+      <input class="filter" id="filter" type="search" placeholder="Search all motions by action or filename" aria-label="Search motions">
+      <div class="menu-list" id="motion-list"></div>
+      <button class="load-more" id="load-more">Load more</button>
+      <div class="footnote" id="catalog-count">Loading motions…</div>
+    </section>
+  </nav>
+  <script>
+    const $ = id => document.getElementById(id);
+    let state = {paused:true,steps:0,motion:0,motion_info:null,policy:true,goal:true,noise:0};
+    let menuOpen = false;
+    let menuGeneration = 0, shown = 0, resultTotal = 0, searchTimer;
+    async function api(action, extra={}) {
+      const res = await fetch('/api/action', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,...extra})});
+      if (!res.ok) throw new Error((await res.json()).error || 'Control failed');
+      await refresh();
+    }
+    function chosen() {
+      const motion = state.motion_info;
+      if (!motion) return;
+      $('motions').innerHTML = `☰&nbsp; <strong>${escapeHTML(motion.category)}</strong> · ${escapeHTML(motion.label)}`;
+    }
+    function escapeHTML(value) { return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    async function loadPage(offset, generation) {
+      const query = $('filter').value.trim();
+      const params = new URLSearchParams({q:query,offset:String(offset),limit:'60'});
+      const response = await fetch('/api/catalog?' + params);
+      if (!response.ok) return;
+      const data = await response.json();
+      if (generation !== menuGeneration) return;
+      const groups = new Map();
+      for (const motion of data.motions) {
+        if (!groups.has(motion.category)) groups.set(motion.category, []);
+        groups.get(motion.category).push(motion);
+      }
+      for (const [category, items] of groups) {
+        const group = document.createElement('details');
+        group.open = !!query || category === state.motion_info?.category;
+        const summary = document.createElement('summary');
+        summary.innerHTML = `<span>${escapeHTML(category)}</span><span class="count">${items.length}</span>`;
+        group.append(summary);
+        for (const motion of items) {
+          const button = document.createElement('button');
+          button.className = 'item' + (motion.index===state.motion?' selected':'');
+          button.innerHTML = `${escapeHTML(motion.label)}<span class="source">${escapeHTML(motion.source_name)} · ${(motion.frames/50).toFixed(1)}s</span>`;
+          button.onclick = async () => { await api('select',{index:motion.index}); toggleMenu(false); };
+          group.append(button);
+        }
+        $('motion-list').append(group);
+      }
+      shown += data.motions.length;
+      resultTotal = data.total;
+      $('load-more').style.display = shown < resultTotal ? 'block' : 'none';
+      $('catalog-count').textContent = `Showing ${shown.toLocaleString()} of ${resultTotal.toLocaleString()} matches · ${data.library_total.toLocaleString()} V10 motions total`;
+    }
+    function renderMenu() {
+      const generation = ++menuGeneration;
+      shown = 0;
+      $('motion-list').replaceChildren();
+      $('catalog-count').textContent = 'Searching…';
+      $('load-more').style.display = 'none';
+      loadPage(0,generation).catch(() => { $('catalog-count').textContent = 'Could not load motions'; });
+    }
+    function toggleMenu(open) {
+      menuOpen = open;
+      $('menu').classList.toggle('open',open);
+      $('motions').setAttribute('aria-expanded',String(open));
+      if(open) { renderMenu(); $('filter').focus(); }
+    }
+    async function refresh() {
+      try {
+        const res = await fetch('/api/state', {cache:'no-store'});
+        if(!res.ok) return;
+        const next = await res.json();
+        state = next;
+        $('steps').textContent = `STEP ${Number(state.steps).toLocaleString()} SINCE THE LAST RESET`;
+        $('play').textContent = state.paused ? '▶' : 'Ⅱ';
+        $('play').setAttribute('aria-label', state.paused ? 'Play' : 'Pause');
+        $('policy').classList.toggle('on',state.policy);
+        $('policy').setAttribute('aria-pressed',String(state.policy));
+        $('goal').classList.toggle('active',state.goal);
+        $('reference-legend').classList.toggle('off',!state.goal);
+        $('noise-value').textContent = Number(state.noise).toFixed(2);
+        chosen();
+      } catch { /* preserve controls during a brief viewer reconnect */ }
+    }
+    $('reset').onclick = () => api('reset');
+    $('play').onclick = () => api('play');
+    $('policy').onclick = () => api('policy',{value:!state.policy});
+    $('goal').onclick = () => api('goal',{value:!state.goal});
+    $('noise').oninput = event => { $('noise-value').textContent = Number(event.target.value).toFixed(2); };
+    $('noise').onchange = event => api('noise',{value:Number(event.target.value)});
+    $('motions').onclick = () => toggleMenu(!menuOpen);
+    $('filter').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(renderMenu,150); };
+    $('load-more').onclick = () => loadPage(shown,menuGeneration);
+    document.addEventListener('keydown', event => {
+      if (event.target.matches('input')) return;
+      if (event.key === ' ') { event.preventDefault(); api('play'); }
+      else if (event.key.toLowerCase()==='r') api('reset');
+      else if (event.key.toLowerCase()==='g') api('goal',{value:!state.goal});
+      else if (event.key.toLowerCase()==='p') api('policy',{value:!state.policy});
+      else if (event.key === 'Escape') toggleMenu(false);
+    });
+    document.addEventListener('click', event => { if(menuOpen&&!event.target.closest('#menu,#motions')) toggleMenu(false); });
+    refresh(); setInterval(refresh,300);
+  </script>
+</body>
+</html>

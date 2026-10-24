@@ -1,0 +1,120 @@
+{
+  "keys": [
+    "fps",
+    "joint_names",
+    "body_names",
+    "joint_pos",
+    "joint_vel",
+    "body_pos_w",
+    "body_quat_w",
+    "body_lin_vel_w",
+    "body_ang_vel_w"
+  ],
+  "dtypes": {
+    "fps": "<f8",
+    "joint_names": "<U26",
+    "body_names": "<U25",
+    "joint_pos": "<f4",
+    "joint_vel": "<f4",
+    "body_pos_w": "<f4",
+    "body_quat_w": "<f4",
+    "body_lin_vel_w": "<f4",
+    "body_ang_vel_w": "<f4"
+  },
+  "shapes": {
+    "fps": [],
+    "joint_names": [
+      26
+    ],
+    "body_names": [
+      27
+    ],
+    "joint_pos": [
+      -1,
+      26
+    ],
+    "joint_vel": [
+      -1,
+      26
+    ],
+    "body_pos_w": [
+      -1,
+      27,
+      3
+    ],
+    "body_quat_w": [
+      -1,
+      27,
+      4
+    ],
+    "body_lin_vel_w": [
+      -1,
+      27,
+      3
+    ],
+    "body_ang_vel_w": [
+      -1,
+      27,
+      3
+    ]
+  },
+  "joint_names": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "torso_yaw_joint",
+    "torso_pitch_joint",
+    "torso_roll_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_joint",
+    "head_joint"
+  ],
+  "body_names": [
+    "pelvis_link",
+    "left_hip_pitch_link",
+    "left_hip_roll_link",
+    "left_hip_yaw_link",
+    "left_knee_link",
+    "left_ankle_pitch_link",
+    "left_ankle_roll_link",
+    "right_hip_pitch_link",
+    "right_hip_roll_link",
+    "right_hip_yaw_link",
+    "right_knee_link",
+    "right_ankle_pitch_link",
+    "right_ankle_roll_link",
+    "torso_yaw_link",
+    "torso_pitch_link",
+    "torso_roll_link",
+    "left_shoulder_pitch_link",
+    "left_shoulder_roll_link",
+    "left_shoulder_yaw_link",
+    "left_elbow_link",
+    "left_wrist_link",
+    "right_shoulder_pitch_link",
+    "right_shoulder_roll_link",
+    "right_shoulder_yaw_link",
+    "right_elbow_link",
+    "right_wrist_link",
+    "head_link"
+  ],
+  "fps": 50.0,
+  "source": "Humanoid V10 MuJoCo model"
+}

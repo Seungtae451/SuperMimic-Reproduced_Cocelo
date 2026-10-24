@@ -33,6 +33,8 @@ class EnvCfg:
     future_frames: int = 10
     compact_library: bool = False
     anchor_obs: bool = False
+    root_pos_weight: float = 0.5
+    root_ori_weight: float = 0.5
 
 
 @dataclass
@@ -51,6 +53,7 @@ class ScheduleCfg:
 @dataclass
 class TrainConfig:
     run_name: str = "debug"
+    robot: str = "g1"  # g1 | v10
     log_root: Path = Path("logs")
     seed: int = 0
     device: str = "cuda:0"

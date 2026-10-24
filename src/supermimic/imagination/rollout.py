@@ -47,7 +47,8 @@ def imagine(
     n = start.state.shape[0]
     q0 = lib.default_joint_pos
     step_fn = step_fn or ImagStep(wm, q0)
-    noise_half = OBS_NOISE_HALF.to(device)
+    nj = lib.num_joints
+    noise_half = torch.tensor([0.01] * nj + [0.5] * nj + [0.2] * 3 + [0.05] * 3 + [0.0] * nj, device=device)
     anchor_noise_half = ANCHOR_NOISE_HALF.to(device)
     ai = wm.heads.anchor_index
 

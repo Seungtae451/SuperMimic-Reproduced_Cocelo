@@ -121,3 +121,7 @@ env -u PYTHONPATH uv run python scripts/play.py --ckpt logs/e7/ckpt_latest.pt --
 - mjlab 的 `csv_to_npz` 四元数 slerp 在相邻帧几乎相同时会提前返回（姿态滞后一帧），本仓库用自己的向量化 slerp（与 scipy 一致到 1e-9）。
 - MuJoCo Warp 的 solver 溢出 printf 是编译期常量，必须在 `put_model` 后、图捕获前关闭，否则早期策略每步触发、仿真慢 10×。
 - torchrun 下 MuJoCo Warp 总在第一张可见卡上，需按 rank 设置 `CUDA_VISIBLE_DEVICES`（`scripts/train.py` 自动处理）。
+
+## V10 integration scaffold
+
+The local V10 workspace now supports direct BONES-SEED SOMA BVH → V10 PyRoki retargeting and a kinematic quality audit. Four complete clips have passed; see [docs/V10_RETARGETING.md](docs/V10_RETARGETING.md) and [docs/V10_LAYOUT.md](docs/V10_LAYOUT.md). The default G1 training and evaluation path remains unchanged. V10 policy training and dynamic evaluation still require a separate robot/environment port.

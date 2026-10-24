@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 from supermimic.world_model.dynamics import MLP
-from supermimic.world_model.heads import OBS_TERMS
+from supermimic.world_model.heads import obs_terms
 
 GOAL_DIM = 680
 LATENT_DIM = 32
@@ -17,6 +17,12 @@ ACT_DIM = 29
 
 @dataclass
 class PolicyCfg:
+    num_joints: int = 29
+    bounded_actions: bool = False
+    reference_action_linear_scale: tuple[float, ...] | None = None
+    reference_action_cubic_scale: tuple[float, ...] | None = None
+    reference_action_default_pos: tuple[float, ...] | None = None
+    reference_residual_scale: float = 0.25
     encoder_hidden: tuple[int, ...] = (2048, 1024, 512, 256)
     decoder_hidden: tuple[int, ...] = (2048, 1024, 512, 256)
     latent_dim: int = LATENT_DIM
@@ -36,15 +42,15 @@ class CriticCfg:
 
 def _obs_scale_vector(cfg: PolicyCfg) -> torch.Tensor:
     parts = []
-    for (name, d), s in zip(OBS_TERMS, cfg.obs_term_scale):
+    for (name, d), s in zip(obs_terms(cfg.num_joints), cfg.obs_term_scale):
         parts.append(torch.full((cfg.history * d,), 1.0 / s))
     return torch.cat(parts)  # term-major layout matches the flattened history
 
 
 def _goal_scale_vector(cfg: PolicyCfg, goal_dim: int) -> torch.Tensor:
-    sizes = (29, 29, 3, 3, 3, 1)
+    sizes = (cfg.num_joints, cfg.num_joints, 3, 3, 3, 1)
     per_frame = torch.cat([torch.full((n,), 1.0 / s) for n, s in zip(sizes, cfg.goal_term_scale)])
-    k, extra = divmod(goal_dim, 68)
+    k, extra = divmod(goal_dim, 2 * cfg.num_joints + 10)
     return torch.cat([per_frame.repeat(k), torch.ones(extra)])
 
 
@@ -60,13 +66,16 @@ class MotionEncoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, cfg: PolicyCfg, obs_dim: int = 930):
+    def __init__(self, cfg: PolicyCfg, obs_dim: int | None = None):
         super().__init__()
-        self.mlp = MLP(cfg.latent_dim + obs_dim, cfg.decoder_hidden, ACT_DIM, last_gain=cfg.decoder_last_gain)
+        obs_dim = obs_dim or cfg.history * (3 * cfg.num_joints + 6)
+        self.bounded_actions = cfg.bounded_actions
+        self.mlp = MLP(cfg.latent_dim + obs_dim, cfg.decoder_hidden, cfg.num_joints, last_gain=cfg.decoder_last_gain)
         self.register_buffer("scale", _obs_scale_vector(cfg))
 
     def forward(self, z: torch.Tensor, obs_hist: torch.Tensor) -> torch.Tensor:
-        return self.mlp(torch.cat([z, obs_hist * self.scale], dim=-1))
+        action = self.mlp(torch.cat([z, obs_hist * self.scale], dim=-1))
+        return torch.tanh(action) if self.bounded_actions else action
 
 
 class Policy(nn.Module):
@@ -77,9 +86,42 @@ class Policy(nn.Module):
         self.cfg = cfg
         self.encoders = nn.ModuleDict({"motion": MotionEncoder(cfg)})
         self.decoder = Decoder(cfg)
+        if cfg.reference_action_linear_scale is not None:
+            if cfg.reference_action_cubic_scale is None or cfg.reference_action_default_pos is None:
+                raise ValueError("Reference action prior needs cubic scale and default position")
+            if any(len(v) != cfg.num_joints for v in (
+                cfg.reference_action_linear_scale, cfg.reference_action_cubic_scale,
+                cfg.reference_action_default_pos,
+            )):
+                raise ValueError("Reference action prior must match the policy joint count")
+            self.register_buffer("prior_linear", torch.tensor(cfg.reference_action_linear_scale))
+            self.register_buffer("prior_cubic", torch.tensor(cfg.reference_action_cubic_scale))
+            self.register_buffer("prior_default", torch.tensor(cfg.reference_action_default_pos))
+        else:
+            self.prior_linear = None
+            self.prior_cubic = None
+            self.prior_default = None
+
+    def _reference_action(self, goal: torch.Tensor) -> torch.Tensor:
+        """Invert the V10 monotone position map for the current reference pose."""
+        target = goal[..., :self.cfg.num_joints] + self.prior_default
+        linear, cubic = self.prior_linear, self.prior_cubic
+        with torch.no_grad():
+            a = torch.clamp(target / (linear + cubic), -1.0, 1.0)
+            for _ in range(8):
+                error = linear * a + cubic * a.pow(3) - target
+                derivative = linear + 3.0 * cubic * a.square()
+                a = torch.clamp(a - error / derivative, -1.0, 1.0)
+        return a
 
     def forward(self, obs_hist: torch.Tensor, goal: torch.Tensor, interface: str = "motion") -> torch.Tensor:
-        return self.decoder(self.encoders[interface](goal), obs_hist)
+        residual = self.decoder(self.encoders[interface](goal), obs_hist)
+        if self.prior_linear is None:
+            return residual
+        return torch.clamp(
+            self._reference_action(goal) + self.cfg.reference_residual_scale * residual,
+            -1.0, 1.0,
+        )
 
 
 class Critic(nn.Module):

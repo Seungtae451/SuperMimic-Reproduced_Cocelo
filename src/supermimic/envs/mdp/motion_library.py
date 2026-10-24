@@ -83,12 +83,19 @@ class MotionLibrary:
         bin_frames: int = 50,
         compact: bool = False,
         store_dtype: torch.dtype = torch.float16,
+        root_body_name: str = "pelvis",
+        model_path: str | Path | None = None,
     ):
         self.device = torch.device(device)
         self.dtype = dtype
         self.body_names = tuple(body_names)
         self.bin_frames = int(bin_frames)
         self.compact = compact
+        self.root_body_name = root_body_name
+        self.num_joints = int(default_joint_pos.numel() if isinstance(default_joint_pos, torch.Tensor)
+                              else np.asarray(default_joint_pos).size)
+        self.ref_dim = 2 * self.num_joints + 13
+        self.goal_feat_dim = 2 * self.num_joints + 10
         if len(npz_files) == 0:
             raise ValueError("MotionLibrary needs at least one clip")
         if isinstance(default_joint_pos, torch.Tensor):
@@ -102,11 +109,23 @@ class MotionLibrary:
         body_idx = root_idx = None
         ref_chunks: list[np.ndarray] = []
         body_chunks = {"pos": [], "quat": [], "lin": [], "ang": []}
-        # A single packed cache (build_library.py) can stand in for the npz list (compact mode only).
-        if len(npz_files) == 1 and str(npz_files[0]).endswith(".pt"):
-            assert compact, "packed .pt libraries are compact-only"
-            pack = torch.load(npz_files[0], map_location="cpu", weights_only=False)
-            self._ref = pack["ref"].to(device=self.device, dtype=store_dtype)
+        # Packed .pt (legacy) or mmap-backed .npy with JSON clip index.
+        if len(npz_files) == 1 and Path(npz_files[0]).suffix in (".pt", ".npy"):
+            assert compact, "packed libraries are compact-only"
+            packed_path = Path(npz_files[0])
+            if packed_path.suffix == ".pt":
+                pack = torch.load(packed_path, map_location="cpu", weights_only=False)
+                self._ref = pack["ref"].to(device=self.device, dtype=store_dtype)
+            else:
+                import json
+
+                pack = json.loads(packed_path.with_suffix(".json").read_text())
+                # Copy-on-write mapping lets torch read it without a read-only
+                # array warning while leaving the on-disk library immutable.
+                mapped = np.load(packed_path, mmap_mode="c", allow_pickle=False)
+                self._ref = torch.as_tensor(mapped, device=self.device, dtype=store_dtype)
+            if self._ref.shape[1] != self.ref_dim:
+                raise ValueError(f"Packed reference has {self._ref.shape[1]} columns; expected {self.ref_dim}")
             clips = [ClipInfo(n, int(st), int(ln)) for n, st, ln in zip(pack["names"], pack["starts"], pack["lengths"])]
             start = int(self._ref.shape[0])
             ref_chunks = None
@@ -115,8 +134,10 @@ class MotionLibrary:
                 if body_idx is None:
                     names = [str(n) for n in d["body_names"]]
                     body_idx = np.array([names.index(n) for n in self.body_names])
-                    root_idx = names.index("pelvis")
+                    root_idx = names.index(self.root_body_name)
                 n = int(d["joint_pos"].shape[0])
+                if d["joint_pos"].shape[1] != self.num_joints:
+                    raise ValueError(f"{f}: reference joint count differs from robot")
                 bp, bq, blv, bav = d["body_pos_w"], d["body_quat_w"], d["body_lin_vel_w"], d["body_ang_vel_w"]
                 ref = np.concatenate(
                     [bp[:, root_idx], bq[:, root_idx], d["joint_pos"], blv[:, root_idx], bav[:, root_idx], d["joint_vel"]], axis=1
@@ -135,7 +156,7 @@ class MotionLibrary:
 
         if ref_chunks is not None:
             ref_np = np.concatenate(ref_chunks, 0)
-            assert ref_np.shape[1] == REF_DIM
+            assert ref_np.shape[1] == self.ref_dim
             self._ref = torch.as_tensor(ref_np, device=self.device, dtype=store_dtype if compact else dtype)
             del ref_np, ref_chunks
         if not compact:
@@ -147,10 +168,14 @@ class MotionLibrary:
             del body_chunks
             self.goal_feat = goal_features(self._split(self._ref), q0)
         else:
+            import mujoco
             from supermimic.data.motion_convert import load_g1_model
             from supermimic.kinematics.g1_fk import G1Kinematics
 
-            self._fk = G1Kinematics(load_g1_model(), device=self.device, dtype=dtype)
+            model = mujoco.MjModel.from_xml_path(str(model_path)) if model_path else load_g1_model()
+            if model.nq != 7 + self.num_joints:
+                raise ValueError("Compact library FK model does not match reference joints")
+            self._fk = G1Kinematics(model, device=self.device, dtype=dtype)
             self._tracked_idx = self._fk.body_indices(self.body_names)
 
         self.clip_start = torch.tensor([c.start for c in clips], device=self.device, dtype=torch.long)
@@ -171,7 +196,9 @@ class MotionLibrary:
 
     @staticmethod
     def _split(r: torch.Tensor) -> RefState:
-        return RefState(r[..., 0:3], r[..., 3:7], r[..., 7:36], r[..., 36:39], r[..., 39:42], r[..., 42:71])
+        nj = (r.shape[-1] - 13) // 2
+        j = 7 + nj
+        return RefState(r[..., 0:3], r[..., 3:7], r[..., 7:j], r[..., j:j+3], r[..., j+3:j+6], r[..., j+6:])
 
     def ref(self, frame: torch.Tensor) -> RefState:
         return self._split(self._ref[frame].to(self.dtype))
@@ -200,19 +227,21 @@ class MotionLibrary:
 
     @property
     def joint_pos(self) -> torch.Tensor:
-        return self._ref[:, 7:36].to(self.dtype)
+        return self._ref[:, 7:7+self.num_joints].to(self.dtype)
 
     @property
     def root_lin_vel_w(self) -> torch.Tensor:
-        return self._ref[:, 36:39].to(self.dtype)
+        j = 7 + self.num_joints
+        return self._ref[:, j:j+3].to(self.dtype)
 
     @property
     def root_ang_vel_w(self) -> torch.Tensor:
-        return self._ref[:, 39:42].to(self.dtype)
+        j = 10 + self.num_joints
+        return self._ref[:, j:j+3].to(self.dtype)
 
     @property
     def joint_vel(self) -> torch.Tensor:
-        return self._ref[:, 42:71].to(self.dtype)
+        return self._ref[:, 13+self.num_joints:].to(self.dtype)
 
     # ------------------------------------------------------------------ queries
 
@@ -229,9 +258,9 @@ class MotionLibrary:
         offs = torch.arange(k, device=self.device)
         idx = torch.minimum(frame[:, None] + offs[None, :], last[:, None])  # (N,k)
         if not self.compact:
-            return self.goal_feat[idx].reshape(frame.shape[0], k * GOAL_FEAT_DIM)
+            return self.goal_feat[idx].reshape(frame.shape[0], k * self.goal_feat_dim)
         feat = goal_features(self.ref(idx.reshape(-1)), self.default_joint_pos)
-        return feat.reshape(frame.shape[0], k * GOAL_FEAT_DIM)
+        return feat.reshape(frame.shape[0], k * self.goal_feat_dim)
 
     def ref_qpos_qvel(self, frame: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """MuJoCo-layout reference state: qpos (N,36) and qvel (N,35; root ang vel in body frame)."""

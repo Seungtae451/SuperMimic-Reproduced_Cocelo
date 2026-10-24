@@ -28,6 +28,7 @@ class ClipResult:
     failed: bool
     fail_step: int  # -1 if not failed
     terms: dict | None = None  # per-term mean reward per step (dt-scaled)
+    failure_reason: str | None = None
 
 
 def load_policy_from_checkpoint(path: str | Path, device: str) -> tuple[Policy, dict]:
@@ -41,10 +42,11 @@ def load_policy_from_checkpoint(path: str | Path, device: str) -> tuple[Policy, 
 
 
 @torch.no_grad()
-def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", num_envs: int | None = None, future_frames: int = 10, verbose: bool = True, anchor_obs: bool = False) -> list[ClipResult]:
+def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", num_envs: int | None = None, future_frames: int = 10, verbose: bool = True, anchor_obs: bool = False, robot: str = "g1", root_pos_weight: float = 0.5, root_ori_weight: float = 0.5) -> list[ClipResult]:
     num_envs = min(num_envs or 1024, len(npz_files))
     args = SuperMimicEnvCfgArgs(
         npz_files=npz_files,
+        robot=robot,
         num_envs=num_envs,
         future_frames=future_frames,
         episode_length_s=1.0e5,  # clip end decides
@@ -54,15 +56,18 @@ def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", 
         domain_randomization=False,
         sampling_mode="start",
         record_transitions=False,
+        compact_library=len(npz_files) == 1 and Path(npz_files[0]).suffix in (".pt", ".npy"),
         seed=0,
         anchor_obs=anchor_obs,
+        root_pos_weight=root_pos_weight,
+        root_ori_weight=root_ori_weight,
     )
     env = make_env(args, device=device)
     try:
         cmd = env.command_manager.get_term("motion")
         lib = cmd.library
         n_clips = lib.num_clips
-        max_r = 0.1  # paper reward upper bound per step (dt * 5)
+        max_r = 0.02 * (4.0 + root_pos_weight + root_ori_weight)
 
         # Clip queue: env e plays clips e, e+N, e+2N, ...
         current = torch.arange(num_envs, device=device)
@@ -98,6 +103,11 @@ def run_benchmark(policy: Policy, npz_files: list[str], device: str = "cuda:0", 
                             failed=bool(term[e]),
                             fail_step=st if bool(term[e]) else -1,
                             terms={n: float(term_sum[e, i]) / max(st, 1) for i, n in enumerate(term_names)},
+                            failure_reason=next(
+                                (name for name in ("root_height", "root_tilt")
+                                 if bool(env.termination_manager.get_term(name)[e])),
+                                "other" if bool(term[e]) else None,
+                            ),
                         )
                         remaining -= 1
                         if verbose and (len(results) % 50 == 0 or len(results) == n_clips):

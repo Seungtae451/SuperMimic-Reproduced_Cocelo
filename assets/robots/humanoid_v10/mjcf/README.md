@@ -1,0 +1,1 @@
+The generated `humanoid_v10.xml` compiles with MuJoCo 3.16 and contains a floating pelvis, 26 active joints, named collision geoms, and ground. It uses existing `_modified.STL` files for meshes over MuJoCo’s 200k-face import limit. Rebuild with `scripts/v10/build_mjcf.py`. Static compilation is checked; contact dynamics and PyRoki tracking are not yet validated.

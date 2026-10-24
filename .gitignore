@@ -13,3 +13,9 @@ wandb/
 .pytest_cache/
 .ruff_cache/
 experiments/**/outputs/
+
+# Local V10 meshes; see assets/robots/humanoid_v10/mesh_manifest.txt
+/assets/robots/humanoid_v10/meshes/*.STL
+
+# Generated from V10 MJCF and PyRoki retarget sites
+/assets/robots/humanoid_v10/mjcf/humanoid_v10_retarget.xml

@@ -45,6 +45,7 @@ NJ = 29
 
 @dataclass
 class StateSpecCfg:
+    num_joints: int = 29
     dt: float = 0.02
     # Nominal error scales (D3) for [root pos m, root rotvec rad, root lin vel m/s, root ang vel rad/s, joint pos rad, joint vel rad/s].
     err_scale: tuple[float, ...] = (0.05, 0.1, 0.5, 1.0, 0.1, 2.0)
@@ -62,18 +63,22 @@ class StateSpec:
     def __init__(self, cfg: StateSpecCfg, device, dtype=torch.float32):
         self.cfg = cfg
         self.dt = cfg.dt
+        self.num_joints = int(cfg.num_joints)
+        nj = self.num_joints
         rep = lambda scales, sizes: torch.cat([torch.full((n,), float(s)) for s, n in zip(scales, sizes)])  # noqa: E731
-        self.err_scale = rep(cfg.err_scale, (3, 3, 3, 3, NJ, NJ)).to(device=device, dtype=dtype)
-        self.out_scale = rep(cfg.out_scale, (3, 3, NJ, 3, 3, NJ)).to(device=device, dtype=dtype)
-        self.in_scale = rep(cfg.in_scale, (1, 6, 3, 3, NJ, NJ)).to(device=device, dtype=dtype)
-        self.xi_offset = torch.tensor(cfg.xi_offset, device=device, dtype=dtype)
-        self.xi_scale = torch.tensor(cfg.xi_scale, device=device, dtype=dtype)
+        self.err_scale = rep(cfg.err_scale, (3, 3, 3, 3, nj, nj)).to(device=device, dtype=dtype)
+        self.out_scale = rep(cfg.out_scale, (3, 3, nj, 3, 3, nj)).to(device=device, dtype=dtype)
+        self.in_scale = rep(cfg.in_scale, (1, 6, 3, 3, nj, nj)).to(device=device, dtype=dtype)
+        xi_offset = cfg.xi_offset if len(cfg.xi_offset) == nj + 4 else (0.75,) + (0.0,) * (nj + 3)
+        xi_scale = cfg.xi_scale if len(cfg.xi_scale) == nj + 4 else (0.45,) + (0.01,) * nj + (0.05,) * 3
+        self.xi_offset = torch.tensor(xi_offset, device=device, dtype=dtype)
+        self.xi_scale = torch.tensor(xi_scale, device=device, dtype=dtype)
 
     # ------------------------------------------------------------------ split / features
 
-    @staticmethod
-    def split(s: torch.Tensor):
-        return s[..., 0:3], s[..., 3:7], s[..., 7:36], s[..., 36:39], s[..., 39:42], s[..., 42:71]
+    def split(self, s: torch.Tensor):
+        j = 7 + self.num_joints
+        return s[..., 0:3], s[..., 3:7], s[..., 7:j], s[..., j:j+3], s[..., j+3:j+6], s[..., j+6:]
 
     def canonical(self, s: torch.Tensor) -> torch.Tensor:
         """Heading-invariant, scaled network input features (…, 71)."""
@@ -93,7 +98,8 @@ class StateSpec:
     def integrate(self, s: torch.Tensor, delta: torch.Tensor) -> torch.Tensor:
         """Apply the (unscaled) network output ``delta`` (…, 70) to state ``s`` (…, 71)."""
         d = delta * self.out_scale
-        dv_h, dw_b, dqd, dp_h, dth_b, dq = d[..., 0:3], d[..., 3:6], d[..., 6:35], d[..., 35:38], d[..., 38:41], d[..., 41:70]
+        j = 6 + self.num_joints
+        dv_h, dw_b, dqd, dp_h, dth_b, dq = d[..., 0:3], d[..., 3:6], d[..., 6:j], d[..., j:j+3], d[..., j+3:j+6], d[..., j+6:]
         p, q, qj, v, w, qd = self.split(s)
         q = quat_normalize(q)
         hq = heading_quat(q)

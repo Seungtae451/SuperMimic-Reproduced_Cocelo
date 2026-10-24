@@ -14,6 +14,7 @@ from supermimic.config import TrainConfig
 from supermimic.data.motion_convert import load_g1_model
 from supermimic.envs import SuperMimicEnvCfgArgs, make_env
 from supermimic.envs.mdp.motion_library import discover_npz
+from supermimic.envs.mdp.rewards import TrackingRewardCfg
 from supermimic.envs.tracking_env_cfg import ANCHOR_BODY, ROOT_BODY, TRACKED_BODIES
 from supermimic.imagination.policy_trainer import PolicyTrainer
 from supermimic.kinematics.g1_fk import G1Kinematics
@@ -28,7 +29,23 @@ from supermimic.world_model.world_model import WorldModel
 class Trainer:
     def __init__(self, cfg: TrainConfig):
         self.cfg = cfg
-        cfg.policy.goal_dim = cfg.env.future_frames * 68 + (9 if cfg.env.anchor_obs else 0)
+        if cfg.robot not in ("g1", "v10"):
+            raise ValueError(f"Unknown robot {cfg.robot}")
+        nj = 29 if cfg.robot == "g1" else 26
+        cfg.policy.num_joints = nj
+        cfg.policy.bounded_actions = cfg.robot == "v10"
+        if cfg.robot == "v10":
+            import mujoco
+            from supermimic.robots.v10.asset import (
+                ACTION_CUBIC_SCALE, ACTION_LINEAR_SCALE, XML, control_profile,
+            )
+            order = control_profile()["joint_order"]
+            model = mujoco.MjModel.from_xml_path(str(XML))
+            cfg.policy.reference_action_linear_scale = tuple(ACTION_LINEAR_SCALE[n] for n in order)
+            cfg.policy.reference_action_cubic_scale = tuple(ACTION_CUBIC_SCALE[n] for n in order)
+            cfg.policy.reference_action_default_pos = tuple(float(x) for x in model.qpos0[7:])
+        cfg.world_model.state_spec.num_joints = nj
+        cfg.policy.goal_dim = cfg.env.future_frames * (2 * nj + 10) + (9 if cfg.env.anchor_obs else 0)
         cfg.policy_trainer.anchor_obs = cfg.env.anchor_obs
         self.rank, local_rank, self.world = init_distributed()
         self.is_main = self.rank == 0
@@ -56,6 +73,7 @@ class Trainer:
         self.env = make_env(
             SuperMimicEnvCfgArgs(
                 npz_files=[str(f) for f in files],
+                robot=cfg.robot,
                 num_envs=cfg.env.num_envs,
                 future_frames=cfg.env.future_frames,
                 episode_length_s=cfg.env.episode_length_s,
@@ -67,6 +85,8 @@ class Trainer:
                 replay_capacity=cfg.env.replay_capacity,
                 compact_library=cfg.env.compact_library,
                 anchor_obs=cfg.env.anchor_obs,
+                root_pos_weight=cfg.env.root_pos_weight,
+                root_ori_weight=cfg.env.root_ori_weight,
                 seed=cfg.seed + 1000 * self.rank,
             ),
             device=self.device,
@@ -78,11 +98,30 @@ class Trainer:
         self.buffer = self.recorder.buffer
         robot = env.scene["robot"]
 
-        fk = G1Kinematics(load_g1_model(), device=self.device)
-        heads = AnalyticHeads(fk, TRACKED_BODIES, ANCHOR_BODY, ROOT_BODY, robot.data.soft_joint_pos_limits[0].clone(), robot.data.default_joint_pos[0].clone())
+        if cfg.robot == "v10":
+            import mujoco
+            from supermimic.robots.v10.asset import (
+                ACTION_RATE_WEIGHT, SOFT_JOINT_LIMIT_WEIGHT,
+                ANCHOR_BODY as robot_anchor, ROOT_BODY as robot_root,
+                TRACKED_BODIES as robot_bodies, XML,
+            )
+            fk_model = mujoco.MjModel.from_xml_path(str(XML))
+            reward_cfg = TrackingRewardCfg(w_action_rate=ACTION_RATE_WEIGHT,
+                                           w_joint_limit=SOFT_JOINT_LIMIT_WEIGHT,
+                                           w_root_pos=cfg.env.root_pos_weight,
+                                           w_root_ori=cfg.env.root_ori_weight)
+        else:
+            robot_anchor, robot_root, robot_bodies = ANCHOR_BODY, ROOT_BODY, TRACKED_BODIES
+            fk_model = load_g1_model()
+            reward_cfg = TrackingRewardCfg(w_root_pos=cfg.env.root_pos_weight,
+                                           w_root_ori=cfg.env.root_ori_weight)
+        fk = G1Kinematics(fk_model, device=self.device)
+        heads = AnalyticHeads(fk, robot_bodies, robot_anchor, robot_root,
+                              robot.data.soft_joint_pos_limits[0].clone(), robot.data.default_joint_pos[0].clone(),
+                              reward_cfg=reward_cfg)
         self.wm = WorldModel(cfg.world_model, heads, self.device)
         self.policy = Policy(cfg.policy).to(self.device)
-        self.critic = Critic(cfg.critic, pcfg=cfg.policy).to(self.device)
+        self.critic = Critic(cfg.critic, feat_dim=2*nj+13, xi_dim=nj+4, pcfg=cfg.policy).to(self.device)
         for m in (self.wm, self.policy, self.critic):
             broadcast_params(m)
         self.wm_trainer = WorldModelTrainer(self.wm, self.lib, cfg.wm_trainer)
@@ -155,6 +194,9 @@ class Trainer:
         finished_returns: list[float] = []
         finished_lens: list[float] = []
         last_log = time.time()
+        # Replay transitions are intentionally not checkpointed. After resume,
+        # refill enough history before sampling world-model windows again.
+        local_steps = 0
 
         while self.iteration < sch.total_iterations:
             # ---------------- (1) collect one vectorised env step
@@ -175,9 +217,10 @@ class Trainer:
             torch.cuda.synchronize()
             timers["sim"] += time.perf_counter() - t0
             self.iteration += 1
+            local_steps += 1
 
             # ---------------- (2)+(3) updates at the configured update-to-data ratio
-            if self.iteration >= sch.warmup_iterations:
+            if local_steps >= sch.warmup_iterations:
                 self._utd_acc += sch.updates_per_env_step
                 while self._utd_acc >= 1.0:
                     self._utd_acc -= 1.0

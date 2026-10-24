@@ -70,6 +70,7 @@ FOOT_GEOM_REGEX = r"^(left|right)_foot[1-7]_collision$"
 @dataclass
 class SuperMimicEnvCfgArgs:
     npz_files: list[str]
+    robot: str = "g1"
     num_envs: int = 4096
     future_frames: int = 10
     history_length: int = 10
@@ -84,7 +85,10 @@ class SuperMimicEnvCfgArgs:
     seed: int | None = 0
     root_height_threshold: float = 0.25
     root_tilt_threshold: float = 0.8
+    terminate_on_tracking_error: bool = True
     joint_limit_weight: float = -2.0
+    root_pos_weight: float = 0.5
+    root_ori_weight: float = 0.5
     bin_frames: int = 50
     compact_library: bool = False
     anchor_obs: bool = False  # add BeyondMimic anchor-relative pose (9) to the goal group (plan D5 alt.)
@@ -93,6 +97,32 @@ class SuperMimicEnvCfgArgs:
 
 
 def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
+    if a.robot == "g1":
+        robot_cfg = get_g1_robot_cfg()
+        action_scale = G1_ACTION_SCALE
+        cubic_scale = None
+        action_limits = None
+        action_rate_weight = -0.1
+        joint_limit_weight = a.joint_limit_weight
+        tracked_bodies, anchor_body, root_body, foot_geoms = TRACKED_BODIES, ANCHOR_BODY, ROOT_BODY, FOOT_GEOM_REGEX
+        model_path = None
+    elif a.robot == "v10":
+        from supermimic.robots.v10.asset import (
+            ACTION_CUBIC_SCALE, ACTION_LIMITS, ACTION_LINEAR_SCALE,
+            ACTION_RATE_WEIGHT, SOFT_JOINT_LIMIT_WEIGHT,
+            ANCHOR_BODY as V10_ANCHOR, FOOT_GEOM_REGEX as V10_FEET,
+            ROOT_BODY as V10_ROOT, TRACKED_BODIES as V10_BODIES, XML, get_v10_robot_cfg,
+        )
+        robot_cfg = get_v10_robot_cfg()
+        action_scale = ACTION_LINEAR_SCALE
+        cubic_scale = ACTION_CUBIC_SCALE
+        action_limits = ACTION_LIMITS
+        action_rate_weight = ACTION_RATE_WEIGHT
+        joint_limit_weight = SOFT_JOINT_LIMIT_WEIGHT
+        tracked_bodies, anchor_body, root_body, foot_geoms = V10_BODIES, V10_ANCHOR, V10_ROOT, V10_FEET
+        model_path = str(XML)
+    else:
+        raise ValueError(f"Unknown robot: {a.robot}")
     # ---------------------------------------------------------------- observations
     noise = (lambda lo, hi: Unoise(n_min=lo, n_max=hi)) if a.obs_noise else (lambda lo, hi: None)
     policy_terms = {
@@ -132,7 +162,9 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
         "joint_pos": NoisyJointPositionActionCfg(
             entity_name="robot",
             actuator_names=(".*",),
-            scale=G1_ACTION_SCALE,
+            scale=action_scale,
+            cubic_scale=cubic_scale,
+            joint_position_limits=action_limits,
             use_default_offset=True,
             noise_std=a.action_noise_std,
         )
@@ -144,9 +176,10 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
     commands = {
         "motion": MultiClipMotionCommandCfg(
             npz_files=[str(f) for f in a.npz_files],
-            anchor_body_name=ANCHOR_BODY,
-            root_body_name=ROOT_BODY,
-            body_names=TRACKED_BODIES,
+            anchor_body_name=anchor_body,
+            root_body_name=root_body,
+            body_names=tracked_bodies,
+            model_path=model_path,
             entity_name="robot",
             future_frames=a.future_frames,
             bin_frames=a.bin_frames,
@@ -167,7 +200,7 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
             mode="startup",
             func=dr.body_com_offset,
             params={
-                "asset_cfg": SceneEntityCfg("robot", body_names=("torso_link",)),
+                "asset_cfg": SceneEntityCfg("robot", body_names=(anchor_body,)),
                 "operation": "add",
                 "ranges": {0: (-0.025, 0.025), 1: (-0.05, 0.05), 2: (-0.05, 0.05)},
             },
@@ -181,7 +214,7 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
             mode="reset",
             func=dr.geom_friction,
             params={
-                "asset_cfg": SceneEntityCfg("robot", geom_names=FOOT_GEOM_REGEX),
+                "asset_cfg": SceneEntityCfg("robot", geom_names=foot_geoms),
                 "operation": "abs",
                 "ranges": (0.3, 1.2),
                 "shared_random": True,
@@ -193,7 +226,7 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
             mode="startup",
             func=dr.geom_friction,
             params={
-                "asset_cfg": SceneEntityCfg("robot", geom_names=FOOT_GEOM_REGEX),
+                "asset_cfg": SceneEntityCfg("robot", geom_names=foot_geoms),
                 "operation": "abs",
                 "ranges": (1.0, 1.0),
                 "shared_random": True,
@@ -202,30 +235,37 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
 
     # ---------------------------------------------------------------- rewards (Table A.2)
     rewards = {
-        "motion_global_root_pos": RewardTermCfg(func=track_mdp.motion_global_anchor_position_error_exp, weight=0.5, params={"command_name": "motion", "std": 0.3}),
-        "motion_global_root_ori": RewardTermCfg(func=track_mdp.motion_global_anchor_orientation_error_exp, weight=0.5, params={"command_name": "motion", "std": 0.4}),
+        "motion_global_root_pos": RewardTermCfg(func=track_mdp.motion_global_anchor_position_error_exp, weight=a.root_pos_weight, params={"command_name": "motion", "std": 0.3}),
+        "motion_global_root_ori": RewardTermCfg(func=track_mdp.motion_global_anchor_orientation_error_exp, weight=a.root_ori_weight, params={"command_name": "motion", "std": 0.4}),
         "motion_body_pos": RewardTermCfg(func=track_mdp.motion_relative_body_position_error_exp, weight=1.0, params={"command_name": "motion", "std": 0.3}),
         "motion_body_ori": RewardTermCfg(func=track_mdp.motion_relative_body_orientation_error_exp, weight=1.0, params={"command_name": "motion", "std": 0.4}),
         "motion_body_lin_vel": RewardTermCfg(func=track_mdp.motion_global_body_linear_velocity_error_exp, weight=1.0, params={"command_name": "motion", "std": 1.0}),
         "motion_body_ang_vel": RewardTermCfg(func=track_mdp.motion_global_body_angular_velocity_error_exp, weight=1.0, params={"command_name": "motion", "std": 3.14}),
-        "action_rate_l2": RewardTermCfg(func=base_mdp.action_rate_l2, weight=-0.1),
-        "joint_limit": RewardTermCfg(func=base_mdp.joint_pos_limits, weight=a.joint_limit_weight, params={"asset_cfg": SceneEntityCfg("robot", joint_names=(".*",))}),
+        "action_rate_l2": RewardTermCfg(func=base_mdp.action_rate_l2, weight=action_rate_weight),
+        "joint_limit": RewardTermCfg(func=base_mdp.joint_pos_limits, weight=joint_limit_weight, params={"asset_cfg": SceneEntityCfg("robot", joint_names=(".*",))}),
     }
 
     # ---------------------------------------------------------------- terminations
     terminations = {
         "time_out": TerminationTermCfg(func=base_mdp.time_out, time_out=True),
         "clip_end": TerminationTermCfg(func=sm_term.clip_end, params={"command_name": "motion"}, time_out=True),
-        "root_height": TerminationTermCfg(func=sm_term.bad_root_height, params={"command_name": "motion", "threshold": a.root_height_threshold}),
-        "root_tilt": TerminationTermCfg(func=sm_term.bad_root_tilt, params={"command_name": "motion", "threshold": a.root_tilt_threshold}),
     }
+    if a.terminate_on_tracking_error:
+        terminations["root_height"] = TerminationTermCfg(
+            func=sm_term.bad_root_height,
+            params={"command_name": "motion", "threshold": a.root_height_threshold},
+        )
+        terminations["root_tilt"] = TerminationTermCfg(
+            func=sm_term.bad_root_tilt,
+            params={"command_name": "motion", "threshold": a.root_tilt_threshold},
+        )
 
     recorders = {}
     if a.record_transitions:
-        recorders["replay"] = ReplayRecorderCfg(params={"capacity": a.replay_capacity, "foot_geom_regex": FOOT_GEOM_REGEX, "com_body_name": "torso_link"})
+        recorders["replay"] = ReplayRecorderCfg(params={"capacity": a.replay_capacity, "foot_geom_regex": foot_geoms, "com_body_name": anchor_body})
 
     cfg = ManagerBasedRlEnvCfg(
-        scene=SceneCfg(terrain=TerrainEntityCfg(terrain_type="plane"), num_envs=a.num_envs, entities={"robot": get_g1_robot_cfg()}),
+        scene=SceneCfg(terrain=TerrainEntityCfg(terrain_type="plane"), num_envs=a.num_envs, entities={"robot": robot_cfg}),
         observations=observations,
         actions=actions,
         commands=commands,
@@ -233,7 +273,7 @@ def make_env_cfg(a: SuperMimicEnvCfgArgs) -> ManagerBasedRlEnvCfg:
         rewards=rewards,
         terminations=terminations,
         recorders=recorders,
-        viewer=ViewerConfig(origin_type=ViewerConfig.OriginType.ASSET_BODY, entity_name="robot", body_name="torso_link", distance=2.8, fovy=55.0, elevation=-5.0, azimuth=120.0),
+        viewer=ViewerConfig(origin_type=ViewerConfig.OriginType.ASSET_BODY, entity_name="robot", body_name=anchor_body, distance=2.8, fovy=55.0, elevation=-5.0, azimuth=120.0),
         sim=QuietSimulationCfg(nconmax=35, njmax=250, mujoco=MujocoCfg(timestep=0.005, iterations=10, ls_iterations=20)),
         decimation=4,
         episode_length_s=a.episode_length_s,

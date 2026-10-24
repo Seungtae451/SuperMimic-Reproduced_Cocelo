@@ -1,0 +1,549 @@
+{
+  "robot_name": "humanoid_v10",
+  "model_path": "assets/robots/humanoid_v10/mjcf/humanoid_v10.xml",
+  "source_scale": 1.0,
+  "source_joint_aliases": {},
+  "coordinate_frame": "External human motion normalized to Y-up meters; shared human/F26 adaptation; output MuJoCo Z-up WXYZ",
+  "source_heading_alignment_degrees": 0.0,
+  "root_orientation": {
+    "mode": "pelvis_landmark_3d",
+    "hips_source": "Hips",
+    "spine_source": "Spine1",
+    "left_hip_source": "LeftLeg",
+    "right_hip_source": "RightLeg",
+    "smoothing_window_frames": 9,
+    "description": "Build the full pelvis frame from source Hips→Spine1 and left/right hip landmarks, then align frame zero to the robot floating base. No pitch or roll is discarded."
+  },
+  "orientation_calibration": {
+    "root": "first-frame neutral alignment",
+    "effectors": "first-frame orientation relative to Hips"
+  },
+  "orientation_landmarks": {
+    "Chest": {
+      "center": "Chest",
+      "up": "Neck1",
+      "left": "LeftShoulder",
+      "right": "RightShoulder",
+      "description": "Anatomical upper-trunk frame constructed from GEM-X joint positions; avoids source-local joint-axis ambiguity."
+    }
+  },
+  "position_calibration": "source pelvis-local semantic segments mapped onto nominal robot link positions; whole-body rotation is applied once through the floating base",
+  "position_kinematic_parents": {
+    "Hips": null,
+    "Chest": "Hips",
+    "LeftArm": "Chest",
+    "LeftForeArm": "LeftArm",
+    "LeftHand": "LeftForeArm",
+    "RightArm": "Chest",
+    "RightForeArm": "RightArm",
+    "RightHand": "RightForeArm",
+    "LeftLeg": "Hips",
+    "LeftShin": "LeftLeg",
+    "LeftFoot": "LeftShin",
+    "RightLeg": "Hips",
+    "RightShin": "RightLeg",
+    "RightFoot": "RightShin"
+  },
+  "position_chain_scaling": "per semantic segment: transfer source segment rotation onto the robot nominal segment, preserving the exact robot link length; root translation uses source_scale",
+  "f26_solver": {
+    "implementation": "F26 full-sequence PyRoki objective with MJCF-measured sole ground-height cost and exact MuJoCo geometry projection",
+    "contact_smoothing_frames": 5,
+    "max_iterations": 80,
+    "long_motion_max_iterations": 60,
+    "iteration_budget_note": "The upstream F26 script permits 800 iterations. The desktop GUI allows 160 iterations for a short full sequence and 60 per long-motion window so a 30+ second video completes predictably.",
+    "max_full_sequence_frames": 450,
+    "long_motion_solver_fps": 20.0,
+    "window_frames": 320,
+    "overlap_frames": 32,
+    "long_motion_strategy": "For clips longer than 450 output frames, solve the 30 Hz-or-lower source at 20 Hz with the F26 objective in 320-frame windows, blend 32 shared frames, then quaternion/interpolate the policy to the required 50 Hz output.",
+    "weights": {
+      "local_alignment": 1.0,
+      "global_alignment": 4.0,
+      "root_smoothness": 1.0,
+      "joint_smoothness": 4.0,
+      "joint_rest_penalty": 1.0,
+      "joint_vel_limit": 50.0,
+      "joint_velocity_limit_rad_s": 20.0,
+      "foot_contact": 30.0,
+      "foot_tilt": 1.0,
+      "foot_ground": 30.0,
+      "foot_anchor": 20.0
+    },
+    "anatomical_targets": true
+  },
+  "physical_constraints": {
+    "enabled": true,
+    "contact_height_m": 0.005,
+    "collision_margin_m": 0.001,
+    "tolerance_m": 0.0005,
+    "description": "After PyRoki optimization and 50 Hz interpolation, project contact feet onto the ground and remove non-adjacent self-collisions using the authoritative MuJoCo collision meshes."
+  },
+  "initial_pose": {
+    "mode": "upright",
+    "ground_clearance_m": 0.005,
+    "zero_hold_s": 0.5,
+    "transition_s": 1.0,
+    "initial_hold_s": 0.25
+  },
+  "supine_support": {
+    "foot_min_upright": 0.4,
+    "fallback_foot_min_upright": 0.65,
+    "back_max_upright": 0.2,
+    "back_hip_height_margin_m": 0.2,
+    "hand_height_margin_m": 0.01,
+    "knee_height_margin_m": 0.14,
+    "knee_min_upright": 0.15,
+    "knee_max_upright": 0.9,
+    "max_support_speed_mps": 0.4,
+    "minimum_support_frames": 3,
+    "support_height_m": 0.015,
+    "root_orientation_weight": 20.0,
+    "initial_root_orientation_weight": 50.0,
+    "root_vertical_velocity_limit_m_s": 0.8,
+    "root_vertical_velocity_weight": 20.0,
+    "support_ground_weight": 60.0
+  },
+  "initial_transition": {
+    "enabled": false,
+    "mode": "zero_stand",
+    "zero_hold_s": 1.0,
+    "transition_s": 2.0,
+    "initial_hold_s": 0.5,
+    "ground_clearance_m": 0.005
+  },
+  "terminal_transition": {
+    "enabled": false,
+    "mode": "zero_stand",
+    "final_hold_s": 0.5,
+    "transition_s": 2.0,
+    "zero_hold_s": 1.0,
+    "ground_clearance_m": 0.005,
+    "description": "Optional robot-only suffix. Keeps final world XY and yaw, levels roll/pitch, computes a ground-clear base height from zero-joint collision geometry, and sends all 26 Humanoid Light joints exactly to 0.0 rad."
+  },
+  "retarget_model": {
+    "generated_suffix": "_retarget",
+    "description": "A generated, dynamics-neutral MJCF derivative containing robot-specific TCP/proxy sites. The source MJCF is never overwritten."
+  },
+  "retarget_sites": [
+    {
+      "name": "retarget_pelvis",
+      "body": "pelvis_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_chest",
+      "body": "torso_roll_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_left_shoulder",
+      "body": "left_shoulder_yaw_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_left_elbow",
+      "body": "left_elbow_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_left_hand",
+      "body": "left_wrist_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_right_shoulder",
+      "body": "right_shoulder_yaw_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_right_elbow",
+      "body": "right_elbow_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_right_hand",
+      "body": "right_wrist_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_left_hip",
+      "body": "left_hip_pitch_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_left_knee",
+      "body": "left_knee_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_left_foot",
+      "body": "left_ankle_roll_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_right_hip",
+      "body": "right_hip_pitch_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_right_knee",
+      "body": "right_knee_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "retarget_right_foot",
+      "body": "right_ankle_roll_link",
+      "pos_m": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "contacts": {
+    "enabled": true,
+    "feet": [
+      "LeftFoot",
+      "RightFoot"
+    ],
+    "max_speed_mps": 0.22,
+    "height_margin_m": 0.08,
+    "fallback_height_margin_m": 0.04,
+    "fallback_bilateral_tolerance_m": 0.015,
+    "minimum_frames": 8,
+    "smoothing_window_frames": 7,
+    "stance_position_weight_multiplier": 3.0,
+    "anchor": "median"
+  },
+  "joint_angle_tasks": [
+    {
+      "name": "left_elbow_flexion",
+      "start": "LeftArm",
+      "joint": "LeftForeArm",
+      "end": "LeftHand",
+      "weight": 0.12
+    },
+    {
+      "name": "right_elbow_flexion",
+      "start": "RightArm",
+      "joint": "RightForeArm",
+      "end": "RightHand",
+      "weight": 0.12
+    },
+    {
+      "name": "left_knee_flexion",
+      "start": "LeftLeg",
+      "joint": "LeftShin",
+      "end": "LeftFoot",
+      "weight": 0.2
+    },
+    {
+      "name": "right_knee_flexion",
+      "start": "RightLeg",
+      "joint": "RightShin",
+      "end": "RightFoot",
+      "weight": 0.2
+    }
+  ],
+  "joint_order": [
+    "left_hip_pitch_joint",
+    "left_knee_joint",
+    "left_hip_roll_joint",
+    "left_ankle_pitch_joint",
+    "left_hip_yaw_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_knee_joint",
+    "right_hip_roll_joint",
+    "right_ankle_pitch_joint",
+    "right_hip_yaw_joint",
+    "right_ankle_roll_joint",
+    "torso_yaw_joint",
+    "head_joint",
+    "torso_pitch_joint",
+    "torso_roll_joint",
+    "left_shoulder_pitch_joint",
+    "right_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "right_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "right_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "right_elbow_joint",
+    "left_wrist_joint",
+    "right_wrist_joint"
+  ],
+  "ik": {
+    "use_safe_joint_ranges": false,
+    "max_nfev": 72,
+    "jacobian": "3-point",
+    "interior_seed_rad": 0.001,
+    "position_regularization": 0.05,
+    "temporal_smoothness": 0.12,
+    "acceleration_smoothness": 0.07,
+    "bidirectional_passes": 2,
+    "trajectory_anchor": 0.035,
+    "floating_base_orientation": {
+      "enabled": true,
+      "max_offset_rad": [
+        0.2,
+        0.2,
+        0.2
+      ],
+      "source_orientation_weight": 1.0,
+      "temporal_smoothness": 0.7,
+      "acceleration_smoothness": 0.45,
+      "trajectory_anchor": 0.15,
+      "description": "Whole-body IK may adjust the landmark-derived base orientation within ±0.20 rad to satisfy feet, hands and chest jointly; it is constrained by a soft source-pelvis orientation task."
+    },
+    "hierarchical": {
+      "enabled": true,
+      "lower_body_joint_names": [
+        "left_hip_pitch_joint",
+        "left_knee_joint",
+        "left_hip_roll_joint",
+        "left_ankle_pitch_joint",
+        "left_hip_yaw_joint",
+        "left_ankle_roll_joint",
+        "right_hip_pitch_joint",
+        "right_knee_joint",
+        "right_hip_roll_joint",
+        "right_ankle_pitch_joint",
+        "right_hip_yaw_joint",
+        "right_ankle_roll_joint"
+      ],
+      "upper_body_joint_names": [
+        "torso_yaw_joint",
+        "head_joint",
+        "torso_pitch_joint",
+        "torso_roll_joint",
+        "left_shoulder_pitch_joint",
+        "right_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "right_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "right_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "right_elbow_joint",
+        "left_wrist_joint",
+        "right_wrist_joint"
+      ],
+      "lower_body_effectors": [
+        "Hips",
+        "LeftLeg",
+        "LeftShin",
+        "LeftFoot",
+        "RightLeg",
+        "RightShin",
+        "RightFoot"
+      ],
+      "upper_body_effectors": [
+        "Chest",
+        "LeftArm",
+        "LeftForeArm",
+        "LeftHand",
+        "RightArm",
+        "RightForeArm",
+        "RightHand"
+      ],
+      "root_translation_max_offset_m": [
+        0.12,
+        0.12,
+        0.12
+      ],
+      "source_root_position_weight": 3.0,
+      "root_translation_temporal_smoothness": 0.75,
+      "root_translation_acceleration_smoothness": 0.5,
+      "root_translation_trajectory_anchor": 0.2,
+      "root_translation_max_step_m": [
+        0.015,
+        0.015,
+        0.015
+      ],
+      "root_orientation_max_step_rad": [
+        0.08,
+        0.08,
+        0.1
+      ],
+      "lower_body_temporal_smoothness": 0.45,
+      "lower_body_acceleration_smoothness": 0.3,
+      "lower_body_trajectory_anchor": 0.1,
+      "lower_body_max_joint_step_rad": 0.12,
+      "description": "Stage 1 optimizes pelvis/root and sustained lower-body stance contacts with rate-bounded, bidirectional smoothing. Stage 2 holds that result fixed and optimizes torso and arms."
+    },
+    "joint_regularization": {
+      "default": 0.05,
+      "torso_yaw_joint": 1.2,
+      "torso_pitch_joint": 1.5,
+      "torso_roll_joint": 2.0,
+      "head_joint": 0.25
+    },
+    "safe_joint_ranges_rad": {
+      "torso_yaw_joint": [
+        -0.6,
+        0.6
+      ],
+      "torso_pitch_joint": [
+        0.0,
+        0.35
+      ],
+      "torso_roll_joint": [
+        -0.14,
+        0.14
+      ]
+    }
+  },
+  "effectors": [
+    {
+      "source": "Hips",
+      "target_body": "pelvis_link",
+      "target_site": "retarget_pelvis",
+      "position_weight": 15.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "Chest",
+      "target_body": "torso_roll_link",
+      "target_site": "retarget_chest",
+      "position_weight": 5.0,
+      "orientation_weight": 0.7
+    },
+    {
+      "source": "LeftArm",
+      "target_body": "left_shoulder_yaw_link",
+      "target_site": "retarget_left_shoulder",
+      "position_weight": 8.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "LeftForeArm",
+      "target_body": "left_elbow_link",
+      "target_site": "retarget_left_elbow",
+      "position_weight": 10.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "LeftHand",
+      "target_body": "left_wrist_link",
+      "target_site": "retarget_left_hand",
+      "position_weight": 14.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "RightArm",
+      "target_body": "right_shoulder_yaw_link",
+      "target_site": "retarget_right_shoulder",
+      "position_weight": 6.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "RightForeArm",
+      "target_body": "right_elbow_link",
+      "target_site": "retarget_right_elbow",
+      "position_weight": 8.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "RightHand",
+      "target_body": "right_wrist_link",
+      "target_site": "retarget_right_hand",
+      "position_weight": 12.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "LeftLeg",
+      "target_body": "left_hip_pitch_link",
+      "target_site": "retarget_left_hip",
+      "position_weight": 2.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "LeftShin",
+      "target_body": "left_knee_link",
+      "target_site": "retarget_left_knee",
+      "position_weight": 5.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "LeftFoot",
+      "target_body": "left_ankle_roll_link",
+      "target_site": "retarget_left_foot",
+      "position_weight": 14.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "RightLeg",
+      "target_body": "right_hip_pitch_link",
+      "target_site": "retarget_right_hip",
+      "position_weight": 2.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "RightShin",
+      "target_body": "right_knee_link",
+      "target_site": "retarget_right_knee",
+      "position_weight": 5.0,
+      "orientation_weight": 0.0
+    },
+    {
+      "source": "RightFoot",
+      "target_body": "right_ankle_roll_link",
+      "target_site": "retarget_right_foot",
+      "position_weight": 14.0,
+      "orientation_weight": 0.0
+    }
+  ],
+  "_template_notice": "Not runnable yet: validate V10 body/site/geom names, support offsets, orientation, and contact parameters."
+}

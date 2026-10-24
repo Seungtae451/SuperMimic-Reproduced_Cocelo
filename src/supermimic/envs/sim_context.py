@@ -36,5 +36,5 @@ class SimContext:
             com = (ipos[self.com_body_global] - self.com_nominal).expand(n, 3)
         bias = self.robot.data.encoder_bias
         xi = torch.cat([friction.reshape(n, 1), bias, com], dim=-1)
-        assert xi.shape == (n, XI_DIM)
+        assert xi.shape == (n, self.robot.data.joint_pos.shape[-1] + 4)
         return xi.clone()

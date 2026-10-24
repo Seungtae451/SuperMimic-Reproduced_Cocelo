@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import torch
 from mjlab.managers import CommandTerm, CommandTermCfg
@@ -54,6 +54,7 @@ class MultiClipMotionCommand(CommandTerm):
         self.library = MotionLibrary(
             cfg.npz_files, cfg.body_names, default_joint_pos, device=self.device, bin_frames=cfg.bin_frames,
             compact=cfg.compact_library, store_dtype=torch.float16 if cfg.library_fp16 else torch.float32,
+            root_body_name=cfg.root_body_name, model_path=cfg.model_path,
         )
         print(f"[INFO] {self.library.summary()}")
         lib = self.library
@@ -72,6 +73,7 @@ class MultiClipMotionCommand(CommandTerm):
         self.max_ep_steps = min(int(math.ceil(env.cfg.episode_length_s / env.step_dt)) + 2, cfg.max_logged_steps)
         # Evaluation hook: when >= 0, the next reset of that env starts exactly at this global frame.
         self.forced_frame = torch.full((n,), -1, dtype=torch.long, device=self.device)
+        self._viewer_clip_index: int | None = None
         self.ep_rewards = torch.zeros(n, self.max_ep_steps, device=self.device)
         self.ep_bins = torch.zeros(n, self.max_ep_steps, dtype=torch.long, device=self.device)
         self.ep_len = torch.zeros(n, dtype=torch.long, device=self.device)
@@ -291,6 +293,11 @@ class MultiClipMotionCommand(CommandTerm):
         self.ep_len[env_ids] = 0
 
         sampled = self._sample_frames(len(env_ids))
+        # The browser GUI writes only a Python index. Apply it here on the
+        # simulation thread, then use the same exact-first-frame reset path as
+        # deterministic benchmark evaluation.
+        if self._viewer_clip_index is not None:
+            self.forced_frame[env_ids] = self.library.clip_start[self._viewer_clip_index]
         forced = self.forced_frame[env_ids]
         self.frame[env_ids] = torch.where(forced >= 0, forced, sampled)
         self.clip_end[env_ids] = False
@@ -359,6 +366,44 @@ class MultiClipMotionCommand(CommandTerm):
             env_ids, r.root_pos_w + self._env.scene.env_origins[env_ids], r.root_quat_w, r.root_lin_vel_w, r.root_ang_vel_w, r.joint_pos, r.joint_vel
         )
 
+    def create_gui(
+        self,
+        name: str,
+        server: Any,
+        get_env_idx: Callable[[], int],
+        on_change: Callable[[], None] | None = None,
+        request_action: Callable[[str, Any], None] | None = None,
+    ) -> None:
+        """Browser motion picker; selection takes effect on the next exact reset."""
+        if self.cfg.browser_picker_only:
+            # The external demo page searches the full library in pages. Sending
+            # tens of thousands of dropdown options to Viser would freeze it.
+            return
+        labels = self.cfg.demo_labels or tuple(clip.name for clip in self.library.clips)
+        if len(labels) != self.library.num_clips:
+            raise ValueError("Demo labels and motion library must have the same length")
+        if len(set(labels)) != len(labels):
+            raise ValueError("Demo motion labels must be unique")
+        label_to_index = {label: i for i, label in enumerate(labels)}
+        search = server.gui.add_text("Filter motions", initial_value="")
+        motion = server.gui.add_dropdown("Motion", options=labels, initial_value=labels[0])
+        status = server.gui.add_html(f"<small>{self.library.clips[0].name}</small>")
+
+        @search.on_update
+        def _(_) -> None:
+            filtered = tuple(label for label in labels if search.value.casefold() in label.casefold())
+            motion.options = filtered or (motion.value,)
+
+        @motion.on_update
+        def _(_) -> None:
+            clip_id = label_to_index[motion.value]
+            self._viewer_clip_index = clip_id
+            status.content = f"<small>{self.library.clips[clip_id].name}</small>"
+            if request_action is not None:
+                request_action("RESET")
+            if on_change is not None:
+                on_change()
+
     # ------------------------------------------------------------------ debug visualization (viewer only)
 
     _ghost_model = None
@@ -373,10 +418,12 @@ class MultiClipMotionCommand(CommandTerm):
 
             m = copy.deepcopy(self._env.sim.mj_model)
             for gi in range(m.ngeom):
-                if m.geom_contype[gi] != 0 or m.geom_conaffinity[gi] != 0:
-                    m.geom_rgba[gi, 3] = 0  # hide collision geoms
+                if m.geom_bodyid[gi] == 0:
+                    m.geom_rgba[gi, 3] = 0  # ground is not part of the ghost
                 else:
-                    m.geom_rgba[gi] = (0.2, 0.6, 1.0, 0.45)
+                    # V10 uses collision-enabled robot meshes as its visible
+                    # geometry, so filtering by contype hides the whole ghost.
+                    m.geom_rgba[gi] = (1.0, 0.12, 0.52, 1.0)
             self._ghost_model = m
         indexing = self.robot.indexing
         free_q = indexing.free_joint_q_adr.cpu().numpy()
@@ -391,7 +438,8 @@ class MultiClipMotionCommand(CommandTerm):
             qpos[free_q[0:3]] = root_pos[e]
             qpos[free_q[3:7]] = root_quat[e]
             qpos[joint_q] = joint_pos[e]
-            visualizer.add_ghost_mesh(qpos, model=self._ghost_model, label=f"ghost_{e}")
+            visualizer.add_ghost_mesh(qpos, model=self._ghost_model, alpha=0.42,
+                                      label=f"ghost_{e}")
 
 
 @dataclass(kw_only=True)
@@ -399,6 +447,7 @@ class MultiClipMotionCommandCfg(CommandTermCfg):
     npz_files: list[str]
     anchor_body_name: str
     root_body_name: str = "pelvis"
+    model_path: str | None = None
     body_names: tuple[str, ...]
     entity_name: str = "robot"
     future_frames: int = 10
@@ -419,6 +468,8 @@ class MultiClipMotionCommandCfg(CommandTermCfg):
     min_remaining_steps: int = 100
     max_logged_steps: int = 1024
     compact_library: bool = False
+    demo_labels: tuple[str, ...] | None = None
+    browser_picker_only: bool = False
     library_fp16: bool = True
     resampling_time_range: tuple[float, float] = (1.0e9, 1.0e9)
 

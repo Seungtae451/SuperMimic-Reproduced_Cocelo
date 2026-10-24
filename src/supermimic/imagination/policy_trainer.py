@@ -49,8 +49,9 @@ class PolicyTrainer:
     def set_lr(self, lr: float) -> None:
         for g in self.opt.param_groups:
             g["lr"] = lr
+        critic_lr = lr * self.cfg.critic_lr / self.cfg.lr
         for g in self.critic_opt.param_groups:
-            g["lr"] = lr
+            g["lr"] = critic_lr
 
     def _critic_inputs(self, ro: ImagRollout):
         H1, n, _ = ro.states.shape

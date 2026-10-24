@@ -22,9 +22,16 @@ OBS_DIM = 93
 OBS_TERMS = (("joint_pos", 29), ("joint_vel", 29), ("base_ang_vel", 3), ("projected_gravity", 3), ("actions", 29))
 
 
+def obs_terms(num_joints: int):
+    return (("joint_pos", num_joints), ("joint_vel", num_joints),
+            ("base_ang_vel", 3), ("projected_gravity", 3), ("actions", num_joints))
+
+
 def split_state(s: torch.Tensor):
-    """-> root_pos (…,3), root_quat (…,4), joint_pos (…,29), root_lin_vel_w (…,3), root_ang_vel_b (…,3), joint_vel (…,29)."""
-    return s[..., 0:3], s[..., 3:7], s[..., 7:36], s[..., 36:39], s[..., 39:42], s[..., 42:71]
+    """Split a floating-base state with any number of single-DOF joints."""
+    nj = (s.shape[-1] - 13) // 2
+    j = 7 + nj
+    return s[..., 0:3], s[..., 3:7], s[..., 7:j], s[..., j:j+3], s[..., j+3:j+6], s[..., j+6:]
 
 
 def analytic_observation(
@@ -35,7 +42,7 @@ def analytic_observation(
     xi[..., 1:30] is the encoder bias: observed joint positions are ``q + bias - q0``.
     """
     _, root_quat, q, _, ang_b, qd = split_state(s)
-    bias = xi[..., 1:30]
+    bias = xi[..., 1:1 + q.shape[-1]]
     return torch.cat([q + bias - default_joint_pos, qd, ang_b, projected_gravity(root_quat), prev_action], dim=-1)
 
 
@@ -59,7 +66,7 @@ def flatten_history_term_major(hist: torch.Tensor) -> torch.Tensor:
     H, N, _ = hist.shape
     chunks = []
     start = 0
-    for _, d in OBS_TERMS:
+    for _, d in obs_terms((hist.shape[-1] - 6) // 3):
         chunks.append(hist[:, :, start : start + d].permute(1, 0, 2).reshape(N, H * d))
         start += d
     return torch.cat(chunks, dim=-1)
@@ -99,7 +106,7 @@ class AnalyticHeads:
         self.reward_cfg = reward_cfg or TrackingRewardCfg()
 
     def robot_bodies(self, s: torch.Tensor) -> dict[str, torch.Tensor]:
-        out = self.fk(s[..., :36], s[..., 36:])
+        out = self.fk(s[..., :self.fk.nq], s[..., self.fk.nq:])
         idx = self.tracked_idx
         return {
             "pos": out["pos"][..., idx, :],
@@ -125,7 +132,7 @@ class AnalyticHeads:
             anchor_index=self.anchor_index,
             action=action,
             prev_action=prev_action,
-            joint_pos=s_next[..., 7:36],
+            joint_pos=s_next[..., 7:self.fk.nq],
             soft_limits=self.soft_limits,
             cfg=self.reward_cfg,
         )
